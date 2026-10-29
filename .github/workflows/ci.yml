@@ -1,0 +1,128 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # RUSTFLAGS is deliberately not set to -D warnings here: it would apply to
+  # dependencies too, so an upstream crate's warning would break the build.
+  # The lint job denies warnings for this crate's own code instead.
+
+jobs:
+  lint:
+    name: format and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-targets --locked
+      # The doc tests are a separate target that --all-targets skips.
+      - run: cargo test --doc --locked
+
+  live:
+    name: live capture builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # The live feature is off by default precisely because it needs this.
+      # Building it here is what stops it rotting unnoticed.
+      - run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - run: cargo clippy --all-targets --features live -- -D warnings
+      - run: cargo build --features live --locked
+
+  msrv:
+    name: minimum supported rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Pinned to the rust-version in Cargo.toml. A dependency bump that
+      # raises the real minimum fails here rather than in someone's build.
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-targets --locked
+
+  binary:
+    name: the binary does what the readme says
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: write a sample capture and read it back
+        run: |
+          set -euo pipefail
+          cargo run --release --quiet --example sample-capture -- sample.pcap
+          ./target/release/pcap-tui summary sample.pcap | tee summary.txt
+          grep -q 'packets:  9' summary.txt
+          grep -q 'www.example.com' <(./target/release/pcap-tui dump sample.pcap)
+          # A display filter must narrow the output.
+          test "$(./target/release/pcap-tui dump sample.pcap --filter proto:dns | wc -l)" -eq 2
+          # A filter typo must fail rather than print nothing.
+          if ./target/release/pcap-tui dump sample.pcap --filter prot:dns; then
+            echo "a filter typo should have failed" >&2
+            exit 1
+          fi
+
+  docker:
+    name: image builds and runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: pcap-tui:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: dtolnay/rust-toolchain@stable
+      - name: the image reads a capture file from a mounted directory
+        run: |
+          set -euo pipefail
+          docker run --rm pcap-tui:ci --help | grep -q EXAMPLES
+          mkdir -p captures
+          cargo run --quiet --example sample-capture -- captures/sample.pcap
+          docker run --rm -v "$PWD/captures:/captures:ro" pcap-tui:ci \
+            summary sample.pcap | tee out.txt
+          grep -q 'packets:  9' out.txt
+          # The container must not be running as root.
+          test "$(docker run --rm --entrypoint id pcap-tui:ci -u)" != "0"
+
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

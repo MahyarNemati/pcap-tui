@@ -1,0 +1,5 @@
+# cargo audit configuration. No advisories are ignored: if one appears here
+# later it should carry the reasoning for why it does not apply, not just the
+# identifier.
+[advisories]
+ignore = []

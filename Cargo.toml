@@ -1,0 +1,36 @@
+[package]
+name = "pcap-tui"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "A terminal packet analyser: reads pcap/pcapng files or captures live, decodes the common protocols and shows them in a TUI."
+license = "MIT"
+repository = "https://github.com/MahyarNemati/pcap-tui"
+
+[[bin]]
+name = "pcap-tui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.29"
+ratatui = "0.30"
+
+[dependencies.pcap]
+version = "2"
+optional = true
+
+[features]
+# Live capture needs libpcap and elevated privileges. It is off by default so
+# the project builds and tests anywhere, including CI, with no system library
+# and no root -- and so the decoders can be developed against files.
+default = []
+live = ["pcap"]
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+strip = true

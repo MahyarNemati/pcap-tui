@@ -1,0 +1,7 @@
+# Anchored so these match only at the repository root: an unanchored
+# "target" would also ignore a source directory of that name.
+/target/
+/sample.pcap
+/*.pcap
+/*.pcapng
+.DS_Store
